@@ -954,6 +954,75 @@ struct CrashHistory {
   std::vector<std::string> unreadable_channels;
 };
 
+// Event Log channels (ADR-016).
+/// EVT_CHANNEL_TYPE + 1, so 0 stays "unknown".
+enum class EventLogChannelType : uint32_t {
+  Unknown = 0,
+  Admin = 1,
+  Operational = 2,
+  Analytic = 3,
+  Debug = 4,
+};
+
+/// Whether PulseService (LocalService) can read the channel.
+enum class EventLogChannelAccess : uint32_t {
+  Unknown = 0,
+  Readable = 1,
+  Denied = 2,
+  NotFound = 3,
+  Error = 4,
+};
+
+struct EventLogChannelInfo {
+  std::string path;
+  EventLogChannelType type = EventLogChannelType::Unknown;
+  bool enabled = false;
+  EventLogChannelAccess access = EventLogChannelAccess::Unknown;
+  uint64_t record_count = 0;
+  bool has_record_count = false;
+  bool built_in = false;
+  bool tracked = false;
+  std::string detail;
+};
+
+struct ListEventLogChannels {};
+
+struct EventLogChannelList {
+  std::vector<EventLogChannelInfo> channels;
+  int64_t collected_unix_ms = 0;
+  uint32_t max_tracked = 0;
+  uint32_t skipped_channels = 0;
+};
+
+/// The full tracked list; replaces the previous one.
+struct SetTrackedChannels {
+  std::vector<std::string> channels;
+};
+
+enum class TrackedChannelStatus : uint32_t {
+  Unspecified = 0,
+  Tracked = 1,
+  Disabled = 2,
+  AccessDenied = 3,
+  NotFound = 4,
+  UnsupportedType = 5,
+  OverLimit = 6,
+  BuiltIn = 7,
+  Failed = 8,
+};
+
+struct TrackedChannelResult {
+  std::string path;
+  TrackedChannelStatus status = TrackedChannelStatus::Unspecified;
+  std::string detail;
+};
+
+struct TrackedChannels {
+  std::vector<TrackedChannelResult> results;
+  uint32_t max_tracked = 0;
+  std::vector<std::string> tracked;
+};
+
 struct Envelope {
   uint64_t request_id = 0;
   std::variant<std::monostate, ClientHello, ServerHello, Ping, Pong, Heartbeat,
@@ -964,7 +1033,9 @@ struct Envelope {
                DiagnosticsSnapshot, InjectDiagnosticsTestEvent,
                GetProcessDetails, ProcessDetails, GetTimelineEventDetail,
                TimelineEventDetail, GetInventoryDomain, InventoryDomainSnapshot,
-               GetCrashHistory, CrashHistory, ErrorResponse>
+               GetCrashHistory, CrashHistory, ListEventLogChannels,
+               EventLogChannelList, SetTrackedChannels, TrackedChannels,
+               ErrorResponse>
       body;
 };
 

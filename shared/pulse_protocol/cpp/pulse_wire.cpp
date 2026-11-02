@@ -4381,6 +4381,220 @@ bool DecodeCrashHistory(const uint8_t* data, size_t len, CrashHistory* m) {
   return true;
 }
 
+std::vector<uint8_t> EncodeEventLogChannelInfo(const EventLogChannelInfo& m) {
+  std::vector<uint8_t> out;
+  WriteString(1, m.path, &out);
+  WriteU32(2, static_cast<uint32_t>(m.type), &out);
+  WriteBool(3, m.enabled, &out);
+  WriteU32(4, static_cast<uint32_t>(m.access), &out);
+  WriteU64(5, m.record_count, &out);
+  WriteBool(6, m.has_record_count, &out);
+  WriteBool(7, m.built_in, &out);
+  WriteBool(8, m.tracked, &out);
+  WriteString(9, m.detail, &out);
+  return out;
+}
+
+std::vector<uint8_t> EncodeListEventLogChannels(const ListEventLogChannels&) {
+  return {};
+}
+
+std::vector<uint8_t> EncodeEventLogChannelList(const EventLogChannelList& m) {
+  std::vector<uint8_t> out;
+  for (const auto& channel : m.channels) {
+    WriteBytesField(1, EncodeEventLogChannelInfo(channel), &out);
+  }
+  WriteI64(2, m.collected_unix_ms, &out);
+  WriteU32(3, m.max_tracked, &out);
+  WriteU32(4, m.skipped_channels, &out);
+  return out;
+}
+
+std::vector<uint8_t> EncodeSetTrackedChannels(const SetTrackedChannels& m) {
+  std::vector<uint8_t> out;
+  for (const auto& channel : m.channels) {
+    WriteString(1, channel, &out);
+  }
+  return out;
+}
+
+std::vector<uint8_t> EncodeTrackedChannelResult(const TrackedChannelResult& m) {
+  std::vector<uint8_t> out;
+  WriteString(1, m.path, &out);
+  WriteU32(2, static_cast<uint32_t>(m.status), &out);
+  WriteString(3, m.detail, &out);
+  return out;
+}
+
+std::vector<uint8_t> EncodeTrackedChannels(const TrackedChannels& m) {
+  std::vector<uint8_t> out;
+  for (const auto& result : m.results) {
+    WriteBytesField(1, EncodeTrackedChannelResult(result), &out);
+  }
+  WriteU32(2, m.max_tracked, &out);
+  for (const auto& channel : m.tracked) {
+    WriteString(3, channel, &out);
+  }
+  return out;
+}
+
+bool DecodeEventLogChannelInfo(const uint8_t* data, size_t len,
+                               EventLogChannelInfo* m) {
+  const uint8_t* p = data;
+  const uint8_t* end = data + len;
+  while (p < end) {
+    uint64_t tag = 0;
+    if (!ReadVarint(p, end, &tag)) return false;
+    const uint32_t field = static_cast<uint32_t>(tag >> 3);
+    const uint32_t wire = static_cast<uint32_t>(tag & 7);
+    uint64_t v = 0;
+    if (field == 1 && wire == 2) {
+      if (!DecodeString(p, end, &m->path)) return false;
+    } else if (field == 2 && wire == 0) {
+      if (!ReadVarint(p, end, &v)) return false;
+      m->type = static_cast<EventLogChannelType>(static_cast<uint32_t>(v));
+    } else if (field == 3 && wire == 0) {
+      if (!ReadVarint(p, end, &v)) return false;
+      m->enabled = v != 0;
+    } else if (field == 4 && wire == 0) {
+      if (!ReadVarint(p, end, &v)) return false;
+      m->access = static_cast<EventLogChannelAccess>(static_cast<uint32_t>(v));
+    } else if (field == 5 && wire == 0) {
+      if (!ReadVarint(p, end, &v)) return false;
+      m->record_count = v;
+    } else if (field == 6 && wire == 0) {
+      if (!ReadVarint(p, end, &v)) return false;
+      m->has_record_count = v != 0;
+    } else if (field == 7 && wire == 0) {
+      if (!ReadVarint(p, end, &v)) return false;
+      m->built_in = v != 0;
+    } else if (field == 8 && wire == 0) {
+      if (!ReadVarint(p, end, &v)) return false;
+      m->tracked = v != 0;
+    } else if (field == 9 && wire == 2) {
+      if (!DecodeString(p, end, &m->detail)) return false;
+    } else if (!SkipField(wire, p, end)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool DecodeListEventLogChannels(const uint8_t* data, size_t len,
+                                ListEventLogChannels* /*m*/) {
+  const uint8_t* p = data;
+  const uint8_t* end = data + len;
+  while (p < end) {
+    uint64_t tag = 0;
+    if (!ReadVarint(p, end, &tag)) return false;
+    const uint32_t wire = static_cast<uint32_t>(tag & 7);
+    if (!SkipField(wire, p, end)) return false;
+  }
+  return true;
+}
+
+bool DecodeEventLogChannelList(const uint8_t* data, size_t len,
+                               EventLogChannelList* m) {
+  const uint8_t* p = data;
+  const uint8_t* end = data + len;
+  while (p < end) {
+    uint64_t tag = 0;
+    if (!ReadVarint(p, end, &tag)) return false;
+    const uint32_t field = static_cast<uint32_t>(tag >> 3);
+    const uint32_t wire = static_cast<uint32_t>(tag & 7);
+    uint64_t v = 0;
+    if (field == 1 && wire == 2) {
+      if (!DecodeNested(p, end, DecodeEventLogChannelInfo, &m->channels)) {
+        return false;
+      }
+    } else if (field == 2 && wire == 0) {
+      if (!ReadVarint(p, end, &v)) return false;
+      m->collected_unix_ms = static_cast<int64_t>(v);
+    } else if (field == 3 && wire == 0) {
+      if (!ReadVarint(p, end, &v)) return false;
+      m->max_tracked = static_cast<uint32_t>(v);
+    } else if (field == 4 && wire == 0) {
+      if (!ReadVarint(p, end, &v)) return false;
+      m->skipped_channels = static_cast<uint32_t>(v);
+    } else if (!SkipField(wire, p, end)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool DecodeSetTrackedChannels(const uint8_t* data, size_t len,
+                              SetTrackedChannels* m) {
+  const uint8_t* p = data;
+  const uint8_t* end = data + len;
+  while (p < end) {
+    uint64_t tag = 0;
+    if (!ReadVarint(p, end, &tag)) return false;
+    const uint32_t field = static_cast<uint32_t>(tag >> 3);
+    const uint32_t wire = static_cast<uint32_t>(tag & 7);
+    if (field == 1 && wire == 2) {
+      std::string channel;
+      if (!DecodeString(p, end, &channel)) return false;
+      m->channels.push_back(std::move(channel));
+    } else if (!SkipField(wire, p, end)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool DecodeTrackedChannelResult(const uint8_t* data, size_t len,
+                                TrackedChannelResult* m) {
+  const uint8_t* p = data;
+  const uint8_t* end = data + len;
+  while (p < end) {
+    uint64_t tag = 0;
+    if (!ReadVarint(p, end, &tag)) return false;
+    const uint32_t field = static_cast<uint32_t>(tag >> 3);
+    const uint32_t wire = static_cast<uint32_t>(tag & 7);
+    if (field == 1 && wire == 2) {
+      if (!DecodeString(p, end, &m->path)) return false;
+    } else if (field == 2 && wire == 0) {
+      uint64_t v = 0;
+      if (!ReadVarint(p, end, &v)) return false;
+      m->status = static_cast<TrackedChannelStatus>(static_cast<uint32_t>(v));
+    } else if (field == 3 && wire == 2) {
+      if (!DecodeString(p, end, &m->detail)) return false;
+    } else if (!SkipField(wire, p, end)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool DecodeTrackedChannels(const uint8_t* data, size_t len,
+                           TrackedChannels* m) {
+  const uint8_t* p = data;
+  const uint8_t* end = data + len;
+  while (p < end) {
+    uint64_t tag = 0;
+    if (!ReadVarint(p, end, &tag)) return false;
+    const uint32_t field = static_cast<uint32_t>(tag >> 3);
+    const uint32_t wire = static_cast<uint32_t>(tag & 7);
+    if (field == 1 && wire == 2) {
+      if (!DecodeNested(p, end, DecodeTrackedChannelResult, &m->results)) {
+        return false;
+      }
+    } else if (field == 2 && wire == 0) {
+      uint64_t v = 0;
+      if (!ReadVarint(p, end, &v)) return false;
+      m->max_tracked = static_cast<uint32_t>(v);
+    } else if (field == 3 && wire == 2) {
+      std::string channel;
+      if (!DecodeString(p, end, &channel)) return false;
+      m->tracked.push_back(std::move(channel));
+    } else if (!SkipField(wire, p, end)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 bool EncodeEnvelope(const Envelope& env, std::vector<uint8_t>* out) {
@@ -4457,6 +4671,20 @@ bool EncodeEnvelope(const Envelope& env, std::vector<uint8_t>* out) {
                     out);
   } else if (std::holds_alternative<CrashHistory>(env.body)) {
     WriteBytesField(40, EncodeCrashHistory(std::get<CrashHistory>(env.body)), out);
+  } else if (std::holds_alternative<ListEventLogChannels>(env.body)) {
+    WriteBytesField(
+        41, EncodeListEventLogChannels(std::get<ListEventLogChannels>(env.body)),
+        out);
+  } else if (std::holds_alternative<EventLogChannelList>(env.body)) {
+    WriteBytesField(
+        42, EncodeEventLogChannelList(std::get<EventLogChannelList>(env.body)),
+        out);
+  } else if (std::holds_alternative<SetTrackedChannels>(env.body)) {
+    WriteBytesField(
+        43, EncodeSetTrackedChannels(std::get<SetTrackedChannels>(env.body)), out);
+  } else if (std::holds_alternative<TrackedChannels>(env.body)) {
+    WriteBytesField(44, EncodeTrackedChannels(std::get<TrackedChannels>(env.body)),
+                    out);
   } else if (std::holds_alternative<ErrorResponse>(env.body)) {
     WriteBytesField(99, EncodeError(std::get<ErrorResponse>(env.body)), out);
   }
@@ -4484,7 +4712,8 @@ bool DecodeEnvelope(const uint8_t* data, size_t len, Envelope* out) {
                 field == 27 || field == 28 || field == 29 || field == 30 ||
                 field == 31 || field == 32 || field == 33 || field == 34 ||
                 field == 35 || field == 36 || field == 37 || field == 38 ||
-                field == 39 || field == 40 || field == 99)) {
+                field == 39 || field == 40 || field == 41 || field == 42 ||
+                field == 43 || field == 44 || field == 99)) {
       uint64_t blen = 0;
       if (!ReadVarint(p, end, &blen)) return false;
       if (p + blen > end) return false;
@@ -4605,6 +4834,30 @@ bool DecodeEnvelope(const uint8_t* data, size_t len, Envelope* out) {
       } else if (field == 40) {
         CrashHistory m;
         if (!DecodeCrashHistory(sub, static_cast<size_t>(blen), &m)) {
+          return false;
+        }
+        out->body = std::move(m);
+      } else if (field == 41) {
+        ListEventLogChannels m;
+        if (!DecodeListEventLogChannels(sub, static_cast<size_t>(blen), &m)) {
+          return false;
+        }
+        out->body = std::move(m);
+      } else if (field == 42) {
+        EventLogChannelList m;
+        if (!DecodeEventLogChannelList(sub, static_cast<size_t>(blen), &m)) {
+          return false;
+        }
+        out->body = std::move(m);
+      } else if (field == 43) {
+        SetTrackedChannels m;
+        if (!DecodeSetTrackedChannels(sub, static_cast<size_t>(blen), &m)) {
+          return false;
+        }
+        out->body = std::move(m);
+      } else if (field == 44) {
+        TrackedChannels m;
+        if (!DecodeTrackedChannels(sub, static_cast<size_t>(blen), &m)) {
           return false;
         }
         out->body = std::move(m);

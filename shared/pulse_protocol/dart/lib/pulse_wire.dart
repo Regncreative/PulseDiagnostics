@@ -1755,6 +1755,105 @@ class CrashHistory {
   List<String> unreadableChannels;
 }
 
+// --- Event Log channels (ADR-016) ---
+
+/// Wire order matches `EventLogChannelType` in pulse.proto.
+enum EventLogChannelType { unknown, admin, operational, analytic, debug }
+
+/// Whether PulseService can read the channel.
+/// Wire order matches `EventLogChannelAccess` in pulse.proto.
+enum EventLogChannelAccess { unknown, readable, denied, notFound, error }
+
+class EventLogChannelInfo {
+  EventLogChannelInfo({
+    this.path = '',
+    this.type = EventLogChannelType.unknown,
+    this.enabled = false,
+    this.access = EventLogChannelAccess.unknown,
+    this.recordCount = 0,
+    this.hasRecordCount = false,
+    this.builtIn = false,
+    this.tracked = false,
+    this.detail = '',
+  });
+  String path;
+  EventLogChannelType type;
+  bool enabled;
+  EventLogChannelAccess access;
+  int recordCount;
+  bool hasRecordCount;
+  /// Always read by Pulse; cannot be unchecked.
+  bool builtIn;
+  /// Chosen by the user.
+  bool tracked;
+  /// Win32 error text when [access] is not readable.
+  String detail;
+}
+
+class ListEventLogChannels {
+  ListEventLogChannels();
+}
+
+class EventLogChannelList {
+  EventLogChannelList({
+    List<EventLogChannelInfo>? channels,
+    this.collectedUnixMs = 0,
+    this.maxTracked = 0,
+    this.skippedChannels = 0,
+  }) : channels = channels ?? <EventLogChannelInfo>[];
+  /// Sorted by path, case-insensitive.
+  List<EventLogChannelInfo> channels;
+  int collectedUnixMs;
+  int maxTracked;
+  /// Analytic / Debug channels the service left out.
+  int skippedChannels;
+}
+
+/// The full tracked list; replaces the previous one.
+class SetTrackedChannels {
+  SetTrackedChannels({List<String>? channels})
+      : channels = channels ?? <String>[];
+  List<String> channels;
+}
+
+/// Wire order matches `TrackedChannelStatus` in pulse.proto.
+enum TrackedChannelStatus {
+  unspecified,
+  tracked,
+  disabled,
+  accessDenied,
+  notFound,
+  unsupportedType,
+  overLimit,
+  builtIn,
+  failed,
+}
+
+class TrackedChannelResult {
+  TrackedChannelResult({
+    this.path = '',
+    this.status = TrackedChannelStatus.unspecified,
+    this.detail = '',
+  });
+  String path;
+  TrackedChannelStatus status;
+  String detail;
+}
+
+class TrackedChannels {
+  TrackedChannels({
+    List<TrackedChannelResult>? results,
+    this.maxTracked = 0,
+    List<String>? tracked,
+  })  : results = results ?? <TrackedChannelResult>[],
+        tracked = tracked ?? <String>[];
+  /// One per requested channel, in request order.
+  List<TrackedChannelResult> results;
+  int maxTracked;
+  /// The list the service saved.
+  List<String> tracked;
+}
+
 class Envelope {
   Envelope({this.requestId = 0, this.body});
   int requestId;
@@ -2845,6 +2944,59 @@ Uint8List _encodeCrashHistory(CrashHistory m) {
   return out.toBytes();
 }
 
+Uint8List _encodeEventLogChannelInfo(EventLogChannelInfo m) {
+  final out = BytesBuilder();
+  _writeString(1, m.path, out);
+  _writeU64(2, m.type.index, out);
+  _writeBool(3, m.enabled, out);
+  _writeU64(4, m.access.index, out);
+  _writeU64(5, m.recordCount, out);
+  _writeBool(6, m.hasRecordCount, out);
+  _writeBool(7, m.builtIn, out);
+  _writeBool(8, m.tracked, out);
+  _writeString(9, m.detail, out);
+  return out.toBytes();
+}
+
+Uint8List _encodeEventLogChannelList(EventLogChannelList m) {
+  final out = BytesBuilder();
+  for (final channel in m.channels) {
+    _writeBytesField(1, _encodeEventLogChannelInfo(channel), out);
+  }
+  _writeU64(2, m.collectedUnixMs, out);
+  _writeU64(3, m.maxTracked, out);
+  _writeU64(4, m.skippedChannels, out);
+  return out.toBytes();
+}
+
+Uint8List _encodeSetTrackedChannels(SetTrackedChannels m) {
+  final out = BytesBuilder();
+  for (final channel in m.channels) {
+    _writeString(1, channel, out);
+  }
+  return out.toBytes();
+}
+
+Uint8List _encodeTrackedChannelResult(TrackedChannelResult m) {
+  final out = BytesBuilder();
+  _writeString(1, m.path, out);
+  _writeU64(2, m.status.index, out);
+  _writeString(3, m.detail, out);
+  return out.toBytes();
+}
+
+Uint8List _encodeTrackedChannels(TrackedChannels m) {
+  final out = BytesBuilder();
+  for (final result in m.results) {
+    _writeBytesField(1, _encodeTrackedChannelResult(result), out);
+  }
+  _writeU64(2, m.maxTracked, out);
+  for (final channel in m.tracked) {
+    _writeString(3, channel, out);
+  }
+  return out.toBytes();
+}
+
 Uint8List encodeEnvelope(Envelope env) {
   final out = BytesBuilder();
   _writeU64(1, env.requestId, out);
@@ -2901,6 +3053,14 @@ Uint8List encodeEnvelope(Envelope env) {
     _writeBytesField(39, _encodeGetCrashHistory(body), out);
   } else if (body is CrashHistory) {
     _writeBytesField(40, _encodeCrashHistory(body), out);
+  } else if (body is ListEventLogChannels) {
+    _writeBytesField(41, Uint8List(0), out);
+  } else if (body is EventLogChannelList) {
+    _writeBytesField(42, _encodeEventLogChannelList(body), out);
+  } else if (body is SetTrackedChannels) {
+    _writeBytesField(43, _encodeSetTrackedChannels(body), out);
+  } else if (body is TrackedChannels) {
+    _writeBytesField(44, _encodeTrackedChannels(body), out);
   } else if (body is ErrorResponse) {
     _writeBytesField(99, _encodeError(body), out);
   }
@@ -5101,6 +5261,128 @@ CrashHistory _decodeCrashHistory(Uint8List data) {
   return m;
 }
 
+T _enumFromWire<T>(List<T> values, int v) =>
+    v < 0 || v >= values.length ? values.first : values[v];
+
+EventLogChannelInfo _decodeEventLogChannelInfo(Uint8List data) {
+  final r = _Reader(data);
+  final m = EventLogChannelInfo();
+  while (r.hasMore) {
+    final tag = r.readVarint();
+    final field = tag >> 3;
+    final wire = tag & 7;
+    if (field == 1 && wire == 2) {
+      m.path = r.readString();
+    } else if (field == 2 && wire == 0) {
+      m.type = _enumFromWire(EventLogChannelType.values, r.readVarint());
+    } else if (field == 3 && wire == 0) {
+      m.enabled = r.readVarint() != 0;
+    } else if (field == 4 && wire == 0) {
+      m.access = _enumFromWire(EventLogChannelAccess.values, r.readVarint());
+    } else if (field == 5 && wire == 0) {
+      m.recordCount = r.readVarint();
+    } else if (field == 6 && wire == 0) {
+      m.hasRecordCount = r.readVarint() != 0;
+    } else if (field == 7 && wire == 0) {
+      m.builtIn = r.readVarint() != 0;
+    } else if (field == 8 && wire == 0) {
+      m.tracked = r.readVarint() != 0;
+    } else if (field == 9 && wire == 2) {
+      m.detail = r.readString();
+    } else {
+      r.skip(wire);
+    }
+  }
+  return m;
+}
+
+ListEventLogChannels _decodeListEventLogChannels(Uint8List data) {
+  final r = _Reader(data);
+  while (r.hasMore) {
+    final tag = r.readVarint();
+    r.skip(tag & 7);
+  }
+  return ListEventLogChannels();
+}
+
+EventLogChannelList _decodeEventLogChannelList(Uint8List data) {
+  final r = _Reader(data);
+  final m = EventLogChannelList();
+  while (r.hasMore) {
+    final tag = r.readVarint();
+    final field = tag >> 3;
+    final wire = tag & 7;
+    if (field == 1 && wire == 2) {
+      m.channels.add(_decodeEventLogChannelInfo(r.readBytes()));
+    } else if (field == 2 && wire == 0) {
+      m.collectedUnixMs = r.readVarint();
+    } else if (field == 3 && wire == 0) {
+      m.maxTracked = r.readVarint();
+    } else if (field == 4 && wire == 0) {
+      m.skippedChannels = r.readVarint();
+    } else {
+      r.skip(wire);
+    }
+  }
+  return m;
+}
+
+SetTrackedChannels _decodeSetTrackedChannels(Uint8List data) {
+  final r = _Reader(data);
+  final m = SetTrackedChannels();
+  while (r.hasMore) {
+    final tag = r.readVarint();
+    final field = tag >> 3;
+    final wire = tag & 7;
+    if (field == 1 && wire == 2) {
+      m.channels.add(r.readString());
+    } else {
+      r.skip(wire);
+    }
+  }
+  return m;
+}
+
+TrackedChannelResult _decodeTrackedChannelResult(Uint8List data) {
+  final r = _Reader(data);
+  final m = TrackedChannelResult();
+  while (r.hasMore) {
+    final tag = r.readVarint();
+    final field = tag >> 3;
+    final wire = tag & 7;
+    if (field == 1 && wire == 2) {
+      m.path = r.readString();
+    } else if (field == 2 && wire == 0) {
+      m.status = _enumFromWire(TrackedChannelStatus.values, r.readVarint());
+    } else if (field == 3 && wire == 2) {
+      m.detail = r.readString();
+    } else {
+      r.skip(wire);
+    }
+  }
+  return m;
+}
+
+TrackedChannels _decodeTrackedChannels(Uint8List data) {
+  final r = _Reader(data);
+  final m = TrackedChannels();
+  while (r.hasMore) {
+    final tag = r.readVarint();
+    final field = tag >> 3;
+    final wire = tag & 7;
+    if (field == 1 && wire == 2) {
+      m.results.add(_decodeTrackedChannelResult(r.readBytes()));
+    } else if (field == 2 && wire == 0) {
+      m.maxTracked = r.readVarint();
+    } else if (field == 3 && wire == 2) {
+      m.tracked.add(r.readString());
+    } else {
+      r.skip(wire);
+    }
+  }
+  return m;
+}
+
 Envelope decodeEnvelope(Uint8List data) {
   final r = _Reader(data);
   final env = Envelope();
@@ -5137,6 +5419,10 @@ Envelope decodeEnvelope(Uint8List data) {
             field == 38 ||
             field == 39 ||
             field == 40 ||
+            field == 41 ||
+            field == 42 ||
+            field == 43 ||
+            field == 44 ||
             field == 99)) {
       final len = r.readVarint();
       final sub = r.data.sublist(r.offset, r.offset + len);
@@ -5219,6 +5505,18 @@ Envelope decodeEnvelope(Uint8List data) {
           break;
         case 40:
           env.body = _decodeCrashHistory(sub);
+          break;
+        case 41:
+          env.body = _decodeListEventLogChannels(sub);
+          break;
+        case 42:
+          env.body = _decodeEventLogChannelList(sub);
+          break;
+        case 43:
+          env.body = _decodeSetTrackedChannels(sub);
+          break;
+        case 44:
+          env.body = _decodeTrackedChannels(sub);
           break;
         case 99:
           env.body = _decodeError(sub);

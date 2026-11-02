@@ -375,4 +375,98 @@ void main() {
     expect(group.recent.single.recordId, 9876543210);
     expect(group.recent.single.channel, 'Application');
   });
+
+  test('Event Log channel messages roundtrip', () {
+    final listRequest = decodeEnvelope(encodeEnvelope(
+      Envelope(requestId: 41, body: ListEventLogChannels()),
+    ));
+    expect(listRequest.requestId, 41);
+    expect(listRequest.body, isA<ListEventLogChannels>());
+
+    final list = decodeEnvelope(encodeEnvelope(Envelope(
+      requestId: 41,
+      body: EventLogChannelList(
+        collectedUnixMs: 1762000000000,
+        maxTracked: 16,
+        skippedChannels: 512,
+        channels: [
+          EventLogChannelInfo(
+            path: 'Microsoft-Windows-TaskScheduler/Operational',
+            type: EventLogChannelType.operational,
+            access: EventLogChannelAccess.readable,
+            hasRecordCount: true,
+            tracked: true,
+          ),
+          EventLogChannelInfo(
+            path: 'Security',
+            type: EventLogChannelType.admin,
+            enabled: true,
+            access: EventLogChannelAccess.denied,
+            builtIn: true,
+            detail: 'Access is denied.',
+          ),
+        ],
+      ),
+    ))).body! as EventLogChannelList;
+    expect(list.maxTracked, 16);
+    expect(list.skippedChannels, 512);
+    expect(list.collectedUnixMs, 1762000000000);
+    expect(list.channels, hasLength(2));
+    expect(list.channels[0].type, EventLogChannelType.operational);
+    expect(list.channels[0].enabled, isFalse);
+    expect(list.channels[0].hasRecordCount, isTrue);
+    expect(list.channels[0].tracked, isTrue);
+    expect(list.channels[1].access, EventLogChannelAccess.denied);
+    expect(list.channels[1].builtIn, isTrue);
+    expect(list.channels[1].detail, 'Access is denied.');
+
+    final set = decodeEnvelope(encodeEnvelope(Envelope(
+      requestId: 43,
+      body: SetTrackedChannels(
+        channels: ['Microsoft-Windows-TaskScheduler/Operational', 'Security'],
+      ),
+    ))).body! as SetTrackedChannels;
+    expect(set.channels, [
+      'Microsoft-Windows-TaskScheduler/Operational',
+      'Security',
+    ]);
+
+    final tracked = decodeEnvelope(encodeEnvelope(Envelope(
+      requestId: 43,
+      body: TrackedChannels(
+        maxTracked: 16,
+        tracked: ['Microsoft-Windows-TaskScheduler/Operational'],
+        results: [
+          TrackedChannelResult(
+            path: 'Microsoft-Windows-TaskScheduler/Operational',
+            status: TrackedChannelStatus.disabled,
+          ),
+          TrackedChannelResult(
+            path: 'Security',
+            status: TrackedChannelStatus.builtIn,
+          ),
+          TrackedChannelResult(
+            path: 'Missing/Channel',
+            status: TrackedChannelStatus.notFound,
+            detail: 'The specified channel could not be found.',
+          ),
+        ],
+      ),
+    ))).body! as TrackedChannels;
+    expect(tracked.maxTracked, 16);
+    expect(tracked.tracked, ['Microsoft-Windows-TaskScheduler/Operational']);
+    expect(tracked.results.map((r) => r.status), [
+      TrackedChannelStatus.disabled,
+      TrackedChannelStatus.builtIn,
+      TrackedChannelStatus.notFound,
+    ]);
+    expect(tracked.results[2].detail, isNotEmpty);
+  });
+
+  test('C++ and Dart agree on channel enum wire values', () {
+    // pulse.proto: EVT_CHANNEL_TYPE + 1, access and status enums.
+    expect(EventLogChannelType.debug.index, 4);
+    expect(EventLogChannelAccess.error.index, 4);
+    expect(TrackedChannelStatus.failed.index, 8);
+  });
 }
