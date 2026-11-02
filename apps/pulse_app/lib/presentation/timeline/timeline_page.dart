@@ -15,6 +15,7 @@ import '../../application/evtx_import_controller.dart';
 import '../../application/settings_controller.dart';
 import '../../application/timeline_library_controller.dart';
 import '../../application/timeline_session_controller.dart';
+import '../../features/channels/channel_display.dart';
 import '../../features/timeline/timeline_activity.dart';
 import '../../features/privacy/personal_data_redactor.dart';
 import '../../features/timeline/evtx_import.dart';
@@ -37,6 +38,7 @@ import '../components/safe_hover.dart';
 import '../components/service_lifecycle_controls.dart';
 import '../utils/pulse_snack.dart';
 import '../utils/pulse_user_errors.dart';
+import 'manage_channels_dialog.dart';
 import 'timeline_date_range_dialog.dart';
 
 class TimelinePage extends StatefulWidget {
@@ -179,6 +181,24 @@ class _TimelinePageState extends State<TimelinePage> {
       _query = _query.copyWith(source: f);
       _pruneSelection(events);
     });
+  }
+
+  void _onChannel(String channel) {
+    final events = context.read<TimelineSessionController>().events;
+    setState(() {
+      _query = _query.copyWith(channel: channel);
+      _pruneSelection(events);
+    });
+  }
+
+  /// Opens Manage channels; reloads the snapshot when the followed logs
+  /// changed so their recent history shows up, not only new events.
+  Future<void> _openManageChannels() async {
+    final session = context.read<TimelineSessionController>();
+    final changed = await showManageChannelsDialog(context);
+    if (changed && mounted && context.read<EvtxImportController>().current == null) {
+      await session.reloadSnapshot();
+    }
   }
 
   void _onCategory(TimelineCategoryFilter f) {
@@ -542,6 +562,13 @@ class _TimelinePageState extends State<TimelinePage> {
     final selectedRca = selectedEvent == null
         ? null
         : _incidentEngine.hintFromItems(selectedEvent, listItems);
+    final channelFilter = _ChannelFilterOptions(
+      channels: timelineChannelOptions(events, library.favoriteChannels),
+      favorites: library.favoriteChannels,
+      onChannel: _onChannel,
+      // An opened .evtx file has its own channels; nothing to manage there.
+      onManage: viewingFile || offlineView ? null : _openManageChannels,
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -659,6 +686,7 @@ class _TimelinePageState extends State<TimelinePage> {
                           scrollController: _listScrollController,
                           onSeverity: _onSeverity,
                           onSource: _onSource,
+                          channelFilter: channelFilter,
                           onCategory: _onCategory,
                           onDateRange: _onDateRange,
                           onProviderFilter: _onProviderFilter,
@@ -760,10 +788,12 @@ class _TimelineBody extends StatelessWidget {
     required this.onJumpToNewest,
     required this.onExportJson,
     required this.onExportCsv,
+    required this.channelFilter,
   });
 
   /// Shown instead of the "last hour" overview while an .evtx is open.
   final Widget? importBanner;
+  final _ChannelFilterOptions channelFilter;
 
   /// Every event held by the session (unfiltered) — feeds the hero summary.
   final List<TimelineEvent> sessionEvents;
@@ -875,6 +905,7 @@ class _TimelineBody extends StatelessWidget {
                     selectedEvent: selectedEvent,
                     onSeverity: onSeverity,
                     onSource: onSource,
+                    channelFilter: channelFilter,
                     onCategory: onCategory,
                     onDateRange: onDateRange,
                     onProviderFilter: onProviderFilter,
@@ -1138,9 +1169,11 @@ class _CompactFilterToolbar extends StatelessWidget {
     required this.onRefresh,
     required this.onExportJson,
     required this.onExportCsv,
+    required this.channelFilter,
   });
 
   final TimelineQuery query;
+  final _ChannelFilterOptions channelFilter;
   final bool advancedOpen;
   final VoidCallback onToggleAdvanced;
   final TextEditingController providerFilterController;
@@ -1179,6 +1212,9 @@ class _CompactFilterToolbar extends StatelessWidget {
         TimelineSourceFilter.security => 'Security',
         TimelineSourceFilter.other => 'Other',
       };
+
+  static String _channelLabel(String channel) =>
+      channel.trim().isEmpty ? 'All logs' : shortChannelLabel(channel);
 
   static String _categoryLabel(TimelineCategoryFilter v) => switch (v) {
         TimelineCategoryFilter.all => 'All types',
@@ -1228,6 +1264,12 @@ class _CompactFilterToolbar extends StatelessWidget {
       chips.add(_ActiveFilterChip(
         label: _sourceLabel(query.source),
         onRemove: () => onSource(TimelineSourceFilter.all),
+      ));
+    }
+    if (query.channel.trim().isNotEmpty) {
+      chips.add(_ActiveFilterChip(
+        label: 'Log: ${shortChannelLabel(query.channel)}',
+        onRemove: () => channelFilter.onChannel(''),
       ));
     }
     if (query.category != TimelineCategoryFilter.all) {
@@ -1307,6 +1349,27 @@ class _CompactFilterToolbar extends StatelessWidget {
                       itemLabel: _sourceLabel,
                       onSelected: onSource,
                     ),
+                    const SizedBox(width: 8),
+                    _FilterDropdown<String>(
+                      label: _channelLabel(query.channel),
+                      value: query.channel,
+                      items: ['', ...channelFilter.channels],
+                      itemLabel: _channelLabel,
+                      onSelected: channelFilter.onChannel,
+                    ),
+                    for (final favorite in channelFilter.favorites) ...[
+                      const SizedBox(width: 8),
+                      Tooltip(
+                        message: favorite,
+                        child: _FilterChip(
+                          label: '★ ${shortChannelLabel(favorite)}',
+                          selected: sameChannel(query.channel, favorite),
+                          onTap: () => channelFilter.onChannel(
+                            sameChannel(query.channel, favorite) ? '' : favorite,
+                          ),
+                        ),
+                      ),
+                    ],
                     const SizedBox(width: 8),
                     _FilterDropdown<TimelineCategoryFilter>(
                       label: _categoryLabel(query.category),
@@ -1411,6 +1474,13 @@ class _CompactFilterToolbar extends StatelessWidget {
                 );
               },
             ),
+            if (channelFilter.onManage != null)
+              IconButton(
+                tooltip: 'Manage event logs',
+                onPressed: channelFilter.onManage,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                icon: const Icon(LucideIcons.listPlus, size: 16),
+              ),
             PopupMenuButton<String>(
               tooltip: 'Export timeline',
               onSelected: (value) {
@@ -1526,7 +1596,14 @@ class _FilterDropdown<T> extends StatelessWidget {
                       : null,
                 ),
                 const SizedBox(width: 6),
-                Text(itemLabel(item)),
+                // Menus are at most 280 px wide; long log names are cut.
+                Flexible(
+                  child: Text(
+                    itemLabel(item),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ),
               ],
             ),
           ),
@@ -1891,6 +1968,26 @@ class _FilterChipState extends State<_FilterChip> with SafeHoverState {
       ),
     );
   }
+}
+
+/// What the toolbar needs for the log (channel) filter and favorites (ADR-016).
+class _ChannelFilterOptions {
+  const _ChannelFilterOptions({
+    required this.channels,
+    required this.favorites,
+    required this.onChannel,
+    required this.onManage,
+  });
+
+  /// Favorites first, then the other logs present in the Timeline.
+  final List<String> channels;
+  final List<String> favorites;
+
+  /// Empty string shows every log merged.
+  final ValueChanged<String> onChannel;
+
+  /// Null while a file is open or the service is offline.
+  final VoidCallback? onManage;
 }
 
 /// "1 hidden event", "12 hidden events".
