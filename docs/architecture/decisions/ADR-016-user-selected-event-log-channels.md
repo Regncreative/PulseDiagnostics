@@ -22,7 +22,7 @@ Constraints:
 1. **Enumeration.** `ListEventLogChannels` returns every channel from `EvtOpenChannelEnum` / `EvtNextChannelPath` whose type (`EvtGetChannelConfigProperty(EvtChannelConfigType)`) is Admin or Operational. For each one it returns:
    - its enabled state (`EvtChannelConfigEnabled`);
    - its record count (`EvtOpenLog` + `EvtGetLogInfo(EvtLogNumberOfLogRecords)`);
-   - whether the service can read it (`EvtQuery` probe);
+   - whether the service can read it: `EvtOpenLog` checks read access for the calling account, and fails with `ERROR_ACCESS_DENIED` exactly like `wevtutil gli`;
    - whether it is built in or tracked.
 
    Analytic and Debug channels are never listed or tracked. They are high-volume tracing channels, disabled by default. Using them would mean turning them on, and Pulse never makes that configuration change.
@@ -47,7 +47,7 @@ Constraints:
 ## Limitations and future work
 
 - A channel disabled when it was subscribed is subscribed again when the user next opens *Manage channels* or saves the list. Pulse does not watch channel configuration.
-- Listing every channel takes a moment (around a thousand channels on Windows 11). It runs only when *Manage channels* opens.
+- Listing every channel takes a moment. On the Windows 11 test PC there were 1,231 channels, 505 of them Admin/Operational, listed in about 350 ms. It runs only when *Manage channels* opens.
 - Custom views, per-channel retention and channel-specific explanations are out of scope.
 
 ## References

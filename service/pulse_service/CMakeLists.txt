@@ -54,6 +54,7 @@ add_executable(PulseService WIN32
   src/intelligence/crash_history.cpp
   src/windows/file_version_info.cpp
   src/collectors/event_log_channels.cpp
+  src/collectors/event_log_channel_catalog.cpp
   src/collectors/evtx_file_reader.cpp
   src/commands/read_evtx_command.cpp
   src/collectors/health_metrics_collector.cpp
@@ -269,6 +270,23 @@ target_include_directories(disk_health_tests PRIVATE
 )
 target_link_libraries(disk_health_tests PRIVATE pulse_wire)
 add_test(NAME disk_health_tests COMMAND disk_health_tests)
+
+add_executable(event_log_channel_catalog_tests
+  test/event_log_channel_catalog_test.cpp
+  src/collectors/event_log_channel_catalog.cpp
+  src/windows/wevt_helpers.cpp
+  src/logging/logger.cpp
+)
+target_include_directories(event_log_channel_catalog_tests PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${PULSE_ROOT}/shared/pulse_protocol/cpp"
+  "${PULSE_ROOT}/shared/pulse_common/include"
+)
+target_link_libraries(event_log_channel_catalog_tests PRIVATE
+  pulse_wire wevtapi ole32 advapi32 psapi
+)
+add_test(NAME event_log_channel_catalog_tests
+  COMMAND event_log_channel_catalog_tests)
 
 add_executable(gpu_engine_load_tests
   test/gpu_engine_load_test.cpp
