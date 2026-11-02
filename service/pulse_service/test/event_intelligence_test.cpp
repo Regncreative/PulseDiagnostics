@@ -184,6 +184,47 @@ int main() {
     assert(insight.importance == Importance::Critical);
   }
 
+  // Unknown events (e.g. from a user-added channel, ADR-016). CHECK, not
+  // assert: CI builds Release, where assert() is compiled out.
+#define CHECK(condition)                                                \
+  do {                                                                  \
+    if (!(condition)) {                                                 \
+      std::cerr << __FILE__ << ":" << __LINE__ << " CHECK failed: "     \
+                << #condition << "\n";                                  \
+      return 1;                                                         \
+    }                                                                   \
+  } while (false)
+  {
+    ipc::TimelineEvent e;
+    e.provider_name = "Microsoft-Windows-TaskScheduler";
+    e.win_event_id = 201;
+    e.severity = ipc::Severity::Info;
+    e.message = "Task Scheduler successfully completed task \"\\Backup\".\r\n"
+                "Instance \"{1234}\", action \"C:\\backup.exe\".";
+    const auto insight = engine.Analyze(e);
+    CHECK(insight.title == "TaskScheduler · Event 201");
+    CHECK(insight.summary ==
+          "Task Scheduler successfully completed task \"\\Backup\".");
+    CHECK(insight.category == InsightCategory::General);
+    CHECK(!insight.action_required);
+  }
+  {
+    ipc::TimelineEvent e;
+    e.provider_name = "Contoso Backup Agent";
+    e.win_event_id = 7;
+    e.severity = ipc::Severity::Error;
+    const auto insight = engine.Analyze(e);
+    CHECK(insight.title == "Contoso Backup Agent · Event 7");
+    CHECK(insight.summary == "A Windows event was recorded.");
+    CHECK(insight.importance == Importance::High);
+  }
+  {
+    ipc::TimelineEvent e;  // no provider, no Event ID
+    const auto insight = engine.Analyze(e);
+    CHECK(insight.title == "Windows event");
+  }
+#undef CHECK
+
   std::cout << "event_intelligence_tests OK\n";
   return 0;
 }
