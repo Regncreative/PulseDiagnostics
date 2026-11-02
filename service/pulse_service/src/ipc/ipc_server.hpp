@@ -1,7 +1,8 @@
 #pragma once
 
-#include "collectors/event_log_subscriber.hpp"
 #include "collectors/health_metrics_collector.hpp"
+#include "collectors/live_channel_subscriptions.hpp"
+#include "collectors/tracked_channels.hpp"
 #include "inventory/inventory_engine.hpp"
 #include "pulse_wire.hpp"
 
@@ -26,6 +27,10 @@ class IpcServer {
 
   /// "Console" or "Windows Service" — set before Start when known.
   void SetRunMode(std::string mode);
+
+  /// Where the user's tracked channels are saved (ADR-016). Set before Start;
+  /// without it the list lives in memory only.
+  void SetTrackedChannelsPath(std::wstring path);
 
  private:
   struct ClientConnection {
@@ -56,6 +61,11 @@ class IpcServer {
 
   void EnsureLiveSubscriber();
   void StopLiveSubscribers();
+  void LoadTrackedChannels();
+  [[nodiscard]] std::vector<std::wstring> TimelineChannels() const;
+  [[nodiscard]] ipc::EventLogChannelList ListChannels(std::string* out_error);
+  [[nodiscard]] ipc::TrackedChannels ApplyTrackedChannels(
+      const std::vector<std::string>& requested);
   void OnLiveEventRecord(EventRecord record);
   void PushLiveEvent(const ipc::TimelineEvent& event);
   void EnableLiveForClient(const std::shared_ptr<ClientConnection>& conn);
@@ -80,10 +90,14 @@ class IpcServer {
   std::mutex clients_mu_;
   std::vector<std::shared_ptr<ClientConnection>> clients_;
 
-  std::mutex live_mu_;
-  std::vector<std::unique_ptr<EventLogSubscriber>> live_subscribers_;
-  std::string live_channels_label_;
-  bool live_subscriber_started_ = false;
+  LiveChannelSubscriptions live_channels_{EventLogSubscriberFactory()};
+
+  // Serializes SetTrackedChannels / ListEventLogChannels (ADR-016).
+  std::mutex tracked_mu_;
+  std::unique_ptr<TrackedChannelsStore> tracked_store_;
+  // Tracked channels that were disabled when last checked; subscribed again
+  // once they are seen enabled.
+  std::vector<std::string> tracked_disabled_;
 
   std::mutex health_mu_;
   HealthMetricsCollector health_collector_;

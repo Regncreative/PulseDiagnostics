@@ -55,6 +55,8 @@ add_executable(PulseService WIN32
   src/windows/file_version_info.cpp
   src/collectors/event_log_channels.cpp
   src/collectors/event_log_channel_catalog.cpp
+  src/collectors/tracked_channels.cpp
+  src/collectors/live_channel_subscriptions.cpp
   src/collectors/evtx_file_reader.cpp
   src/commands/read_evtx_command.cpp
   src/collectors/health_metrics_collector.cpp
@@ -287,6 +289,32 @@ target_link_libraries(event_log_channel_catalog_tests PRIVATE
 )
 add_test(NAME event_log_channel_catalog_tests
   COMMAND event_log_channel_catalog_tests)
+
+add_executable(tracked_channels_tests
+  test/tracked_channels_test.cpp
+  src/collectors/tracked_channels.cpp
+  src/collectors/live_channel_subscriptions.cpp
+  src/collectors/event_log_subscriber.cpp
+  src/collectors/event_log_collector.cpp
+  src/collectors/event_log_channel_catalog.cpp
+  src/intelligence/event_intelligence.cpp
+  src/intelligence/crash_explainer.cpp
+  src/intelligence/wake_explainer.cpp
+  src/intelligence/bugcheck_catalog.cpp
+  src/intelligence/app_crash_explainer.cpp
+  src/intelligence/exception_catalog.cpp
+  src/windows/wevt_helpers.cpp
+  src/logging/logger.cpp
+)
+target_include_directories(tracked_channels_tests PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  "${PULSE_ROOT}/shared/pulse_protocol/cpp"
+  "${PULSE_ROOT}/shared/pulse_common/include"
+)
+target_link_libraries(tracked_channels_tests PRIVATE
+  pulse_wire wevtapi ole32 advapi32 psapi
+)
+add_test(NAME tracked_channels_tests COMMAND tracked_channels_tests)
 
 add_executable(gpu_engine_load_tests
   test/gpu_engine_load_test.cpp
