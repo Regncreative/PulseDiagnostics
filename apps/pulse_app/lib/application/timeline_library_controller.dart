@@ -54,12 +54,36 @@ class TimelineLibraryController extends ChangeNotifier {
   static const _kPins = 'timeline.pins';
   static const _kSavedSearches = 'timeline.saved_searches';
   static const _kHiddenEventTypes = 'timeline.hidden_event_types';
+  static const _kFavoriteChannels = 'timeline.favorite_channels';
 
   SharedPreferences? _prefs;
   final Set<String> _bookmarkedEventIds = {};
   final Set<String> _pinnedEventIds = {};
   final List<SavedTimelineSearch> _savedSearches = [];
   final Map<String, HiddenEventType> _hiddenEventTypes = {};
+  final List<String> _favoriteChannels = [];
+
+  /// Channels pinned for one-click filtering (ADR-016), in the order pinned.
+  List<String> get favoriteChannels => List.unmodifiable(_favoriteChannels);
+
+  bool isFavoriteChannel(String channel) =>
+      _favoriteChannels.any((c) => sameChannel(c, channel));
+
+  /// Pins [channel], or unpins it when already pinned.
+  Future<void> toggleFavoriteChannel(String channel) async {
+    final name = channel.trim();
+    if (name.isEmpty) return;
+    final before = _favoriteChannels.length;
+    _favoriteChannels.removeWhere((c) => sameChannel(c, name));
+    final pinned = _favoriteChannels.length == before;
+    if (pinned) _favoriteChannels.add(name);
+    notifyListeners();
+    await _prefs?.setStringList(_kFavoriteChannels, _favoriteChannels);
+    logger.info(
+      'TimelineLibrary',
+      '${pinned ? 'pinned' : 'unpinned'} channel $name',
+    );
+  }
 
   Set<String> get bookmarkedEventIds => Set.unmodifiable(_bookmarkedEventIds);
   Set<String> get pinnedEventIds => Set.unmodifiable(_pinnedEventIds);
@@ -100,6 +124,13 @@ class TimelineLibraryController extends ChangeNotifier {
       ..clear()
       ..addEntries(_decodeHiddenTypes(p.getString(_kHiddenEventTypes))
           .map((t) => MapEntry(t.key, t)));
+    _favoriteChannels.clear();
+    for (final c in p.getStringList(_kFavoriteChannels) ?? const <String>[]) {
+      final name = c.trim();
+      if (name.isNotEmpty && !isFavoriteChannel(name)) {
+        _favoriteChannels.add(name);
+      }
+    }
     notifyListeners();
   }
 
@@ -235,6 +266,7 @@ Map<String, dynamic> timelineQueryToJson(TimelineQuery q) {
   return {
     'severity': q.severity.name,
     'source': q.source.name,
+    if (q.channel.trim().isNotEmpty) 'channel': q.channel.trim(),
     'category': q.category.name,
     'date_range': q.dateRange.name,
     if (q.customFromUnixMs != null) 'custom_from_unix_ms': q.customFromUnixMs,
@@ -267,6 +299,7 @@ TimelineQuery timelineQueryFromJson(Map<String, dynamic> json) {
   return TimelineQuery(
     severity: sev,
     source: source,
+    channel: json['channel']?.toString() ?? '',
     category: category,
     dateRange: dateRange,
     customFromUnixMs: _optionalInt(json['custom_from_unix_ms']),

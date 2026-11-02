@@ -1,6 +1,7 @@
 #include "ipc/ipc_server.hpp"
 
 #include "collectors/crash_history_collector.hpp"
+#include "collectors/event_log_channel_catalog.hpp"
 #include "collectors/event_log_channels.hpp"
 #include "collectors/event_log_collector.hpp"
 #include "diagnostics/service_identity.hpp"
@@ -30,6 +31,60 @@ int64_t NowUnixMs() {
       .count();
 }
 
+std::string JoinChannels(const std::vector<std::wstring>& channels) {
+  std::string out;
+  for (const std::wstring& channel : channels) {
+    if (!out.empty()) out += ',';
+    out += wevt::WideToUtf8(channel);
+  }
+  return out;
+}
+
+std::vector<std::wstring> ToWide(const std::vector<std::string>& channels) {
+  std::vector<std::wstring> out;
+  out.reserve(channels.size());
+  for (const std::string& channel : channels) {
+    out.push_back(wevt::Utf8ToWide(channel));
+  }
+  return out;
+}
+
+std::vector<std::string> ToUtf8(const std::vector<std::wstring>& channels) {
+  std::vector<std::string> out;
+  out.reserve(channels.size());
+  for (const std::wstring& channel : channels) {
+    out.push_back(wevt::WideToUtf8(channel));
+  }
+  return out;
+}
+
+/// Every built-in channel, readable or not: tracking one is never needed.
+std::vector<std::string> BuiltInChannelNames() {
+  std::vector<std::string> names;
+  for (const EventLogChannelSpec& spec : DiagnosticsChannelCatalog()) {
+    names.push_back(wevt::WideToUtf8(spec.path));
+  }
+  return names;
+}
+
+ipc::EventLogChannelInfo ProbeChannelUtf8(const std::string& path) {
+  return ProbeChannel(wevt::Utf8ToWide(path));
+}
+
+const char* TrackedStatusName(ipc::TrackedChannelStatus status) {
+  switch (status) {
+    case ipc::TrackedChannelStatus::Tracked: return "tracked";
+    case ipc::TrackedChannelStatus::Disabled: return "disabled";
+    case ipc::TrackedChannelStatus::AccessDenied: return "access denied";
+    case ipc::TrackedChannelStatus::NotFound: return "not found";
+    case ipc::TrackedChannelStatus::UnsupportedType: return "unsupported type";
+    case ipc::TrackedChannelStatus::OverLimit: return "over limit";
+    case ipc::TrackedChannelStatus::BuiltIn: return "built in";
+    case ipc::TrackedChannelStatus::Failed: return "failed";
+    default: return "unspecified";
+  }
+}
+
 }  // namespace
 
 IpcServer::IpcServer(std::wstring pipe_name, size_t live_queue_capacity,
@@ -48,6 +103,7 @@ bool IpcServer::Start() {
   if (running_.exchange(true)) return true;
   service_start_unix_ms_ = NowUnixMs();
   service_start_tick_ms_ = GetTickCount64();
+  LoadTrackedChannels();
   EnsureHealthCollector();
   accept_thread_ = std::thread([this] { AcceptLoop(); });
   health_thread_running_ = true;
@@ -281,21 +337,10 @@ void IpcServer::FlushOutbound(const std::shared_ptr<ClientConnection>& conn) {
   }
 }
 
-void IpcServer::StopLiveSubscribers() {
-  std::lock_guard lock(live_mu_);
-  for (auto& sub : live_subscribers_) {
-    if (sub) {
-      sub->Stop();
-    }
-  }
-  live_subscribers_.clear();
-  live_channels_label_.clear();
-  live_subscriber_started_ = false;
-}
+void IpcServer::StopLiveSubscribers() { live_channels_.Stop(); }
 
 void IpcServer::EnsureLiveSubscriber() {
-  std::lock_guard lock(live_mu_);
-  if (live_subscriber_started_) {
+  if (live_channels_.running()) {
     return;
   }
 
@@ -306,34 +351,155 @@ void IpcServer::EnsureLiveSubscriber() {
     return;
   }
 
-  std::ostringstream label;
-  for (const std::wstring& channel : channels) {
-    auto sub = std::make_unique<EventLogSubscriber>();
-    const bool ok = sub->Start(
-        channel, [this](EventRecord record) { OnLiveEventRecord(std::move(record)); });
-    if (!ok) {
-      Logger::Instance().Warn(
-          "IpcServer",
-          "Live subscribe skipped for " + wevt::WideToUtf8(channel));
-      continue;
-    }
-    if (!label.str().empty()) {
-      label << ',';
-    }
-    label << wevt::WideToUtf8(channel);
-    live_subscribers_.push_back(std::move(sub));
-  }
-
-  live_channels_label_ = label.str();
-  live_subscriber_started_ = !live_subscribers_.empty();
-  if (!live_subscriber_started_) {
+  if (!live_channels_.Start(channels, [this](EventRecord record) {
+        OnLiveEventRecord(std::move(record));
+      })) {
     Logger::Instance().Error("IpcServer",
                              "Failed to start any live Event Log subscriber");
-  } else {
-    Logger::Instance().Info(
-        "IpcServer",
-        "Live Event Log subscribers active on: " + live_channels_label_);
+    return;
   }
+  Logger::Instance().Info(
+      "IpcServer", "Live Event Log subscribers active on: " +
+                       JoinChannels(live_channels_.ActiveChannels()));
+}
+
+void IpcServer::SetTrackedChannelsPath(std::wstring path) {
+  tracked_store_ = std::make_unique<TrackedChannelsStore>(std::move(path));
+}
+
+void IpcServer::LoadTrackedChannels() {
+  if (!tracked_store_) {
+    return;
+  }
+  std::vector<std::string> saved;
+  std::string error;
+  if (!tracked_store_->Load(&saved, &error)) {
+    // Keep the file as is: the user's list must not be lost to a bad read.
+    Logger::Instance().Error("IpcServer",
+                             "Tracked channels not loaded: " + error);
+    return;
+  }
+  if (saved.empty()) {
+    return;
+  }
+
+  // Validate without saving: a channel that is gone today (app uninstalled)
+  // stays in the file and is simply not followed.
+  ipc::TrackedChannels checked;
+  ValidateTrackedChannels(saved, BuiltInChannelNames(), ProbeChannelUtf8,
+                          kMaxTrackedChannels, &checked);
+  std::lock_guard lock(tracked_mu_);
+  tracked_disabled_.clear();
+  for (const auto& result : checked.results) {
+    if (result.status == ipc::TrackedChannelStatus::Disabled) {
+      tracked_disabled_.push_back(result.path);
+    } else if (result.status != ipc::TrackedChannelStatus::Tracked) {
+      Logger::Instance().Warn("IpcServer", "Saved tracked channel not followed: " +
+                                               result.path + " (" +
+                                               TrackedStatusName(result.status) + ")");
+    }
+  }
+  live_channels_.SetTracked(ToWide(checked.tracked));
+  Logger::Instance().Info(
+      "IpcServer",
+      "Tracked channels loaded: " + std::to_string(checked.tracked.size()));
+}
+
+std::vector<std::wstring> IpcServer::TimelineChannels() const {
+  std::vector<std::wstring> channels = AccessibleDiagnosticsChannels();
+  for (const std::wstring& tracked : live_channels_.TrackedChannels()) {
+    const bool present = std::any_of(
+        channels.begin(), channels.end(), [&](const std::wstring& c) {
+          return WideChannelPathEquals(c, tracked);
+        });
+    if (!present) {
+      channels.push_back(tracked);
+    }
+  }
+  return channels;
+}
+
+ipc::EventLogChannelList IpcServer::ListChannels(std::string* out_error) {
+  std::lock_guard lock(tracked_mu_);
+  const std::vector<std::string> tracked = ToUtf8(live_channels_.TrackedChannels());
+
+  ChannelEnumeration listed;
+  ipc::EventLogChannelList out;
+  out.max_tracked = kMaxTrackedChannels;
+  out.collected_unix_ms = NowUnixMs();
+  if (!ListTrackableChannels(BuiltInChannelNames(), tracked, &listed, out_error)) {
+    return out;
+  }
+
+  // A tracked channel subscribed while disabled may not deliver events once
+  // the user enables it: subscribe it again when it is seen enabled.
+  for (const auto& channel : listed.channels) {
+    if (!channel.tracked) continue;
+    const auto was_disabled = std::find_if(
+        tracked_disabled_.begin(), tracked_disabled_.end(),
+        [&](const std::string& p) { return ChannelPathEquals(p, channel.path); });
+    if (channel.enabled && was_disabled != tracked_disabled_.end()) {
+      tracked_disabled_.erase(was_disabled);
+      live_channels_.Restart(wevt::Utf8ToWide(channel.path));
+      Logger::Instance().Info("IpcServer",
+                              "Tracked channel now enabled, resubscribed: " +
+                                  channel.path);
+    } else if (!channel.enabled && was_disabled == tracked_disabled_.end()) {
+      tracked_disabled_.push_back(channel.path);
+    }
+  }
+
+  out.channels = std::move(listed.channels);
+  out.skipped_channels = listed.skipped_channels;
+  return out;
+}
+
+ipc::TrackedChannels IpcServer::ApplyTrackedChannels(
+    const std::vector<std::string>& requested) {
+  std::lock_guard lock(tracked_mu_);
+  ipc::TrackedChannels out;
+  ValidateTrackedChannels(requested, BuiltInChannelNames(), ProbeChannelUtf8,
+                          kMaxTrackedChannels, &out);
+
+  if (tracked_store_) {
+    std::string error;
+    if (!tracked_store_->Save(out.tracked, &error)) {
+      // Not applied either: the service and the file must agree, or the
+      // list would silently change at the next restart.
+      Logger::Instance().Error("IpcServer",
+                               "Tracked channels not saved: " + error);
+      out.tracked = ToUtf8(live_channels_.TrackedChannels());
+      for (auto& result : out.results) {
+        if (result.status == ipc::TrackedChannelStatus::Tracked ||
+            result.status == ipc::TrackedChannelStatus::Disabled) {
+          result.status = ipc::TrackedChannelStatus::Failed;
+          result.detail = "The list could not be saved: " + error;
+        }
+      }
+      return out;
+    }
+  }
+
+  std::vector<std::string> previously_disabled;
+  previously_disabled.swap(tracked_disabled_);
+  live_channels_.SetTracked(ToWide(out.tracked));
+  for (const auto& result : out.results) {
+    const bool was_disabled = std::any_of(
+        previously_disabled.begin(), previously_disabled.end(),
+        [&](const std::string& p) { return ChannelPathEquals(p, result.path); });
+    if (result.status == ipc::TrackedChannelStatus::Disabled) {
+      tracked_disabled_.push_back(result.path);
+    } else if (result.status == ipc::TrackedChannelStatus::Tracked &&
+               was_disabled) {
+      live_channels_.Restart(wevt::Utf8ToWide(result.path));
+    }
+  }
+
+  Logger::Instance().Info("IpcServer",
+                          "Tracked channels set: " +
+                              std::to_string(out.tracked.size()) + " of " +
+                              std::to_string(requested.size()) + " requested");
+  return out;
 }
 
 void IpcServer::OnLiveEventRecord(EventRecord record) {
@@ -522,8 +688,8 @@ void IpcServer::HandleEnvelope(const std::shared_ptr<ClientConnection>& conn,
     std::string snapshot_channel;
 
     if (IsDiagnosticsChannelRequest(req.channel)) {
-      const std::vector<std::wstring> channels =
-          AccessibleDiagnosticsChannels();
+      // Built-in channels plus the user's tracked ones (ADR-016).
+      const std::vector<std::wstring> channels = TimelineChannels();
       if (channels.empty()) {
         ipc::Envelope err;
         err.request_id = env.request_id;
@@ -605,6 +771,38 @@ void IpcServer::HandleEnvelope(const std::shared_ptr<ClientConnection>& conn,
     reply.body = CrashHistoryCollector().Collect(req.days);
     if (!WriteEnvelopeLocked(conn, reply)) {
       Logger::Instance().Error("IpcServer", "Failed to write CrashHistory");
+    }
+    return;
+  }
+
+  if (std::holds_alternative<ipc::ListEventLogChannels>(env.body)) {
+    Logger::Instance().Info("IpcServer", "ListEventLogChannels");
+    std::string error;
+    ipc::EventLogChannelList list = ListChannels(&error);
+    ipc::Envelope reply;
+    reply.request_id = env.request_id;
+    if (!error.empty()) {
+      reply.body = ipc::ErrorResponse{3, "Could not list Event Log channels",
+                                      error, "EventLogChannelCatalog"};
+    } else {
+      reply.body = std::move(list);
+    }
+    if (!WriteEnvelopeLocked(conn, reply)) {
+      Logger::Instance().Error("IpcServer", "Failed to write EventLogChannelList");
+    }
+    return;
+  }
+
+  if (std::holds_alternative<ipc::SetTrackedChannels>(env.body)) {
+    const auto& req = std::get<ipc::SetTrackedChannels>(env.body);
+    Logger::Instance().Info(
+        "IpcServer",
+        "SetTrackedChannels requested=" + std::to_string(req.channels.size()));
+    ipc::Envelope reply;
+    reply.request_id = env.request_id;
+    reply.body = ApplyTrackedChannels(req.channels);
+    if (!WriteEnvelopeLocked(conn, reply)) {
+      Logger::Instance().Error("IpcServer", "Failed to write TrackedChannels");
     }
     return;
   }
@@ -984,23 +1182,10 @@ ipc::DiagnosticsSnapshot IpcServer::BuildDiagnosticsSnapshot() {
   snap.live_queue_depth = queue_depth;
   snap.live_queue_capacity = static_cast<uint32_t>(live_queue_capacity_);
 
-  {
-    std::lock_guard lock(live_mu_);
-    uint64_t reconnects = 0;
-    bool any_running = false;
-    for (const auto& sub : live_subscribers_) {
-      if (!sub) {
-        continue;
-      }
-      if (sub->running()) {
-        any_running = true;
-      }
-      reconnects += sub->reconnect_count();
-    }
-    snap.live_subscribed = any_running;
-    snap.live_channel = live_subscriber_started_ ? live_channels_label_ : "";
-    snap.live_subscriber_reconnects = reconnects;
-  }
+  snap.live_subscribed = live_channels_.running();
+  snap.live_channel =
+      snap.live_subscribed ? JoinChannels(live_channels_.ActiveChannels()) : "";
+  snap.live_subscriber_reconnects = live_channels_.ReconnectCount();
   if (any_live && !snap.live_subscribed) {
     // Client asked for live but subscriber failed.
   }

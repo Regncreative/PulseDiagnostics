@@ -537,22 +537,32 @@ std::string TruncateMessage(std::string_view message, std::size_t max_len) {
   return std::string(first.substr(0, max_len - 1)) + "...";
 }
 
-std::string FriendlyProviderTitle(std::string_view provider) {
+std::string FriendlyProviderName(std::string_view provider) {
   if (provider.empty()) {
-    return "Windows Event";
+    return "Windows";
   }
   // Never leave raw provider as-is when we can soften common prefixes.
   constexpr std::string_view kPrefix = "Microsoft-Windows-";
   if (provider.size() > kPrefix.size() &&
       ContainsIgnoreCase(provider.substr(0, kPrefix.size()), kPrefix)) {
-    return std::string(provider.substr(kPrefix.size())) + " Event";
+    return std::string(provider.substr(kPrefix.size()));
   }
   return std::string(provider);
 }
 
+/// "TaskScheduler · Event 201": unknown events still name who logged them and
+/// which Event ID to look up (ADR-016, user-added channels).
+std::string FallbackTitle(std::string_view provider, std::uint32_t event_id) {
+  const std::string name = FriendlyProviderName(provider);
+  if (event_id == 0) {
+    return name + " event";
+  }
+  return name + " · Event " + std::to_string(event_id);
+}
+
 EventInsight Fallback(const ipc::TimelineEvent& event) {
   EventInsight out;
-  out.title = FriendlyProviderTitle(event.provider_name);
+  out.title = FallbackTitle(event.provider_name, event.win_event_id);
   out.summary = TruncateMessage(event.message, 180);
   out.recommendation.clear();
   out.action_required = false;

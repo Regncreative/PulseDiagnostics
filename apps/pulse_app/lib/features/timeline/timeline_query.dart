@@ -34,6 +34,10 @@ enum TimelineDateRangeFilter {
   custom,
 }
 
+/// Windows channel names are case-insensitive.
+bool sameChannel(String a, String b) =>
+    a.trim().toLowerCase() == b.trim().toLowerCase();
+
 /// Client-side Timeline filter + search criteria.
 ///
 /// Matching is case-insensitive. Empty / "all" fields do not constrain.
@@ -49,6 +53,7 @@ class TimelineQuery {
     this.eventIdEquals = '',
     this.processContains = '',
     this.computerContains = '',
+    this.channel = '',
     this.nowUnixMs,
     this.customFromUnixMs,
     this.customToUnixMs,
@@ -56,6 +61,10 @@ class TimelineQuery {
 
   final TimelineSeverityFilter severity;
   final TimelineSourceFilter source;
+
+  /// One Event Log channel (e.g. "Microsoft-Windows-TaskScheduler/Operational"),
+  /// matched exactly and case-insensitively; empty shows every channel merged.
+  final String channel;
   final TimelineCategoryFilter category;
   final TimelineDateRangeFilter dateRange;
 
@@ -86,6 +95,7 @@ class TimelineQuery {
   bool get isActive =>
       severity != TimelineSeverityFilter.all ||
       source != TimelineSourceFilter.all ||
+      channel.trim().isNotEmpty ||
       category != TimelineCategoryFilter.all ||
       dateRange != TimelineDateRangeFilter.all ||
       searchQuery.trim().isNotEmpty ||
@@ -104,6 +114,7 @@ class TimelineQuery {
     String? eventIdEquals,
     String? processContains,
     String? computerContains,
+    String? channel,
     int? nowUnixMs,
     bool clearNowUnixMs = false,
     int? customFromUnixMs,
@@ -112,6 +123,7 @@ class TimelineQuery {
     return TimelineQuery(
       severity: severity ?? this.severity,
       source: source ?? this.source,
+      channel: channel ?? this.channel,
       category: category ?? this.category,
       dateRange: dateRange ?? this.dateRange,
       searchQuery: searchQuery ?? this.searchQuery,
@@ -130,6 +142,7 @@ class TimelineQuery {
   bool matches(TimelineEvent e) {
     if (!_matchesSeverity(e)) return false;
     if (!_matchesSource(e)) return false;
+    if (!_matchesChannel(e)) return false;
     if (!_matchesCategory(e)) return false;
     if (!_matchesDateRange(e)) return false;
     if (!_matchesProvider(e)) return false;
@@ -163,6 +176,12 @@ class TimelineQuery {
       TimelineSourceFilter.other =>
         ch != 'system' && ch != 'application' && ch != 'security',
     };
+  }
+
+  bool _matchesChannel(TimelineEvent e) {
+    final wanted = channel.trim();
+    if (wanted.isEmpty) return true;
+    return sameChannel(e.displayChannel, wanted);
   }
 
   bool _matchesCategory(TimelineEvent e) {

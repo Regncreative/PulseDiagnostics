@@ -4,6 +4,7 @@ import 'package:pulse_protocol/pulse_constants.dart';
 
 import '../application/assistant_controller.dart';
 import '../application/background_mode_controller.dart';
+import '../application/channels_controller.dart';
 import '../application/client_frame_metrics.dart';
 import '../application/connection_controller.dart';
 import '../application/crash_history_controller.dart';
@@ -41,6 +42,7 @@ class AppServices {
     required this.backgroundMode,
     required this.assistant,
     required this.crashHistory,
+    required this.channels,
   });
 
   final PulseIpcClient ipcClient;
@@ -59,6 +61,7 @@ class AppServices {
   final BackgroundModeController backgroundMode;
   final AssistantController assistant;
   final CrashHistoryController crashHistory;
+  final ChannelsController channels;
 
   static Future<AppServices> create() async {
     final logger = AppLogger(file: AppLogFile.openDefault());
@@ -105,6 +108,7 @@ class AppServices {
     );
     final updateCheck = UpdateCheckController(settings: settings, logger: logger);
     final crashHistory = CrashHistoryController(ipc: ipc, logger: logger);
+    final channels = ChannelsController(ipc: ipc, logger: logger);
     // GitHub edition only, and only when the user turned it on.
     if (!const WindowsPulseDeployment().isPackagedMsix) {
       unawaited(updateCheck.checkAutomaticallyIfDue());
@@ -133,6 +137,7 @@ class AppServices {
       backgroundMode: backgroundMode,
       assistant: assistant,
       crashHistory: crashHistory,
+      channels: channels,
     );
   }
 }

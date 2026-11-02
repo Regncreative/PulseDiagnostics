@@ -10,6 +10,7 @@ package pulse.ipc;
 // TASK-006: Live Monitoring (EvtSubscribe push).
 // R2: additive TimelineEvent Wevtapi system fields + lazy GetTimelineEventDetail.
 // R3: additive Inventory Engine GetInventoryDomain / InventoryDomainSnapshot (ADR-011).
+// ADR-016: additive ListEventLogChannels / SetTrackedChannels.
 option csharp_namespace = "Pulse.Ipc";
 
 message ClientHello {
@@ -1020,6 +1021,79 @@ message CrashHistory {
   repeated string unreadable_channels = 6;
 }
 
+// --- Event Log channels (ADR-016) ---
+
+// EVT_CHANNEL_TYPE + 1, so 0 stays "unknown".
+enum EventLogChannelType {
+  EVENT_LOG_CHANNEL_TYPE_UNKNOWN = 0;
+  EVENT_LOG_CHANNEL_TYPE_ADMIN = 1;
+  EVENT_LOG_CHANNEL_TYPE_OPERATIONAL = 2;
+  EVENT_LOG_CHANNEL_TYPE_ANALYTIC = 3;
+  EVENT_LOG_CHANNEL_TYPE_DEBUG = 4;
+}
+
+// Whether PulseService (LocalService) can read the channel.
+enum EventLogChannelAccess {
+  EVENT_LOG_CHANNEL_ACCESS_UNKNOWN = 0;
+  EVENT_LOG_CHANNEL_ACCESS_READABLE = 1;
+  EVENT_LOG_CHANNEL_ACCESS_DENIED = 2;
+  EVENT_LOG_CHANNEL_ACCESS_NOT_FOUND = 3;
+  EVENT_LOG_CHANNEL_ACCESS_ERROR = 4;
+}
+
+message EventLogChannelInfo {
+  string path = 1;                    // e.g. "Microsoft-Windows-TaskScheduler/Operational"
+  EventLogChannelType type = 2;
+  bool enabled = 3;
+  EventLogChannelAccess access = 4;
+  uint64 record_count = 5;
+  bool has_record_count = 6;          // false when the count could not be read
+  bool built_in = 7;                  // always read by Pulse
+  bool tracked = 8;                   // chosen by the user
+  string detail = 9;                  // Win32 error text when access is not READABLE
+}
+
+// Client -> Service: Admin and Operational channels on this PC.
+message ListEventLogChannels {}
+
+// Service -> Client: sorted by path, case-insensitive.
+message EventLogChannelList {
+  repeated EventLogChannelInfo channels = 1;
+  int64 collected_unix_ms = 2;
+  uint32 max_tracked = 3;
+  uint32 skipped_channels = 4;        // Analytic / Debug channels left out
+}
+
+// Client -> Service: the full list of tracked channels (replaces the old one).
+message SetTrackedChannels {
+  repeated string channels = 1;
+}
+
+enum TrackedChannelStatus {
+  TRACKED_CHANNEL_STATUS_UNSPECIFIED = 0;
+  TRACKED_CHANNEL_STATUS_TRACKED = 1;          // accepted and followed
+  TRACKED_CHANNEL_STATUS_DISABLED = 2;         // accepted; no events until enabled
+  TRACKED_CHANNEL_STATUS_ACCESS_DENIED = 3;    // rejected
+  TRACKED_CHANNEL_STATUS_NOT_FOUND = 4;        // rejected
+  TRACKED_CHANNEL_STATUS_UNSUPPORTED_TYPE = 5; // rejected: Analytic / Debug
+  TRACKED_CHANNEL_STATUS_OVER_LIMIT = 6;       // rejected: max_tracked reached
+  TRACKED_CHANNEL_STATUS_BUILT_IN = 7;         // already read by Pulse
+  TRACKED_CHANNEL_STATUS_FAILED = 8;           // rejected: other error, see detail
+}
+
+message TrackedChannelResult {
+  string path = 1;
+  TrackedChannelStatus status = 2;
+  string detail = 3;
+}
+
+// Service -> Client: one result per requested channel, then the saved list.
+message TrackedChannels {
+  repeated TrackedChannelResult results = 1;
+  uint32 max_tracked = 2;
+  repeated string tracked = 3;
+}
+
 message Envelope {
   uint64 request_id = 1; // 0 = server push
   oneof body {
@@ -1049,6 +1123,10 @@ message Envelope {
     InventoryDomainSnapshot inventory_domain_snapshot = 38;
     GetCrashHistory get_crash_history = 39;
     CrashHistory crash_history = 40;
+    ListEventLogChannels list_event_log_channels = 41;
+    EventLogChannelList event_log_channel_list = 42;
+    SetTrackedChannels set_tracked_channels = 43;
+    TrackedChannels tracked_channels = 44;
     ErrorResponse error = 99;
   }
 }

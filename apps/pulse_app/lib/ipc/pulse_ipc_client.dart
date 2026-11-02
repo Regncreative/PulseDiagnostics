@@ -117,10 +117,10 @@ class IpcStatus {
 }
 
 /// UI-facing IPC client. Pipe I/O runs on a dedicated isolate (ADR-008 / P0-5).
-/// PulseService answered a crash history request with an error, e.g. an older
-/// service that does not know the request yet ("Unsupported message").
-class CrashHistoryUnavailable implements Exception {
-  const CrashHistoryUnavailable(this.message, this.technicalDetail);
+/// PulseService answered a request with an error, e.g. an older service that
+/// does not know the request yet ("Unsupported message").
+abstract class ServiceRequestUnavailable implements Exception {
+  const ServiceRequestUnavailable(this.message, this.technicalDetail);
 
   final String message;
   final String technicalDetail;
@@ -131,6 +131,16 @@ class CrashHistoryUnavailable implements Exception {
   String toString() => technicalDetail.isEmpty
       ? message
       : '$message: $technicalDetail';
+}
+
+/// A crash history request failed (doc 43).
+class CrashHistoryUnavailable extends ServiceRequestUnavailable {
+  const CrashHistoryUnavailable(super.message, super.technicalDetail);
+}
+
+/// A channel list or tracked channel request failed (ADR-016).
+class ChannelsUnavailable extends ServiceRequestUnavailable {
+  const ChannelsUnavailable(super.message, super.technicalDetail);
 }
 
 class PulseIpcClient extends ChangeNotifier {
@@ -370,6 +380,41 @@ class PulseIpcClient extends ChangeNotifier {
     }
     if (body is! CrashHistory) {
       throw StateError('Expected CrashHistory, got ${body.runtimeType}');
+    }
+    return body;
+  }
+
+  /// Admin and Operational Event Log channels on this PC (ADR-016).
+  Future<EventLogChannelList> listEventLogChannels() async {
+    final env = Envelope(
+      requestId: _nextRequestId++,
+      body: ListEventLogChannels(),
+    );
+    final reply = await _request(env, timeout: const Duration(seconds: 30));
+    final body = reply.body;
+    if (body is ErrorResponse) {
+      throw ChannelsUnavailable(body.message, body.technicalDetail);
+    }
+    if (body is! EventLogChannelList) {
+      throw StateError('Expected EventLogChannelList, got ${body.runtimeType}');
+    }
+    return body;
+  }
+
+  /// Replaces the channels the service follows with [channels] (ADR-016).
+  /// The reply says, per channel, whether it was accepted.
+  Future<TrackedChannels> setTrackedChannels(List<String> channels) async {
+    final env = Envelope(
+      requestId: _nextRequestId++,
+      body: SetTrackedChannels(channels: List.of(channels)),
+    );
+    final reply = await _request(env, timeout: const Duration(seconds: 15));
+    final body = reply.body;
+    if (body is ErrorResponse) {
+      throw ChannelsUnavailable(body.message, body.technicalDetail);
+    }
+    if (body is! TrackedChannels) {
+      throw StateError('Expected TrackedChannels, got ${body.runtimeType}');
     }
     return body;
   }

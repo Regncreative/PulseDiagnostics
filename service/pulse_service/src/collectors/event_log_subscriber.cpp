@@ -77,10 +77,21 @@ bool EventLogSubscriber::Start(const std::wstring& channel,
 }
 
 void EventLogSubscriber::Stop() {
+  void* subscription = nullptr;
   {
     std::lock_guard lock(mu_);
     running_ = false;
     reconnect_requested_ = false;
+    subscription = std::exchange(subscription_, nullptr);
+  }
+  // Close outside mu_: a callback in flight takes mu_ in DeliverEvent, so
+  // holding it here could deadlock if EvtClose waits for that callback.
+  // Tracked channels are stopped while the service runs (ADR-016).
+  if (subscription != nullptr) {
+    EvtClose(static_cast<EVT_HANDLE>(subscription));
+  }
+  {
+    std::lock_guard lock(mu_);
     StopSubscriptionLocked();
     callback_ = nullptr;
   }

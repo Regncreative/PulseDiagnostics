@@ -929,6 +929,114 @@ int main() {
     return 46;
   }
 
+  // Event Log channels (ADR-016).
+  Envelope list_req_env;
+  list_req_env.request_id = 6001;
+  list_req_env.body = ListEventLogChannels{};
+  std::vector<uint8_t> list_req_payload;
+  Envelope list_req_decoded;
+  if (!EncodeEnvelope(list_req_env, &list_req_payload) ||
+      !DecodeEnvelope(list_req_payload.data(), list_req_payload.size(),
+                      &list_req_decoded) ||
+      list_req_decoded.request_id != 6001 ||
+      !std::holds_alternative<ListEventLogChannels>(list_req_decoded.body)) {
+    std::cerr << "ListEventLogChannels round trip failed\n";
+    return 47;
+  }
+
+  EventLogChannelInfo task_scheduler;
+  task_scheduler.path = "Microsoft-Windows-TaskScheduler/Operational";
+  task_scheduler.type = EventLogChannelType::Operational;
+  task_scheduler.enabled = false;
+  task_scheduler.access = EventLogChannelAccess::Readable;
+  task_scheduler.record_count = 0;
+  task_scheduler.has_record_count = true;
+  task_scheduler.tracked = true;
+  EventLogChannelInfo security;
+  security.path = "Security";
+  security.type = EventLogChannelType::Admin;
+  security.enabled = true;
+  security.access = EventLogChannelAccess::Denied;
+  security.built_in = true;
+  security.detail = "Access is denied.";
+  EventLogChannelList channel_list;
+  channel_list.channels = {task_scheduler, security};
+  channel_list.collected_unix_ms = 1762000000000;
+  channel_list.max_tracked = 16;
+  channel_list.skipped_channels = 512;
+  Envelope list_env;
+  list_env.request_id = 6001;
+  list_env.body = channel_list;
+  std::vector<uint8_t> list_payload;
+  Envelope list_decoded;
+  if (!EncodeEnvelope(list_env, &list_payload) ||
+      !DecodeEnvelope(list_payload.data(), list_payload.size(), &list_decoded) ||
+      !std::holds_alternative<EventLogChannelList>(list_decoded.body)) {
+    std::cerr << "EventLogChannelList round trip failed\n";
+    return 48;
+  }
+  const auto& list_out = std::get<EventLogChannelList>(list_decoded.body);
+  if (list_out.channels.size() != 2 || list_out.max_tracked != 16 ||
+      list_out.skipped_channels != 512 ||
+      list_out.collected_unix_ms != 1762000000000 ||
+      list_out.channels[0].path != task_scheduler.path ||
+      list_out.channels[0].type != EventLogChannelType::Operational ||
+      list_out.channels[0].enabled || !list_out.channels[0].has_record_count ||
+      !list_out.channels[0].tracked || list_out.channels[0].built_in ||
+      list_out.channels[1].access != EventLogChannelAccess::Denied ||
+      !list_out.channels[1].built_in ||
+      list_out.channels[1].detail != "Access is denied.") {
+    std::cerr << "EventLogChannelList payload mismatch\n";
+    return 48;
+  }
+
+  Envelope set_env;
+  set_env.request_id = 6002;
+  set_env.body = SetTrackedChannels{
+      {"Microsoft-Windows-TaskScheduler/Operational", "Security"}};
+  std::vector<uint8_t> set_payload;
+  Envelope set_decoded;
+  if (!EncodeEnvelope(set_env, &set_payload) ||
+      !DecodeEnvelope(set_payload.data(), set_payload.size(), &set_decoded) ||
+      !std::holds_alternative<SetTrackedChannels>(set_decoded.body) ||
+      std::get<SetTrackedChannels>(set_decoded.body).channels.size() != 2 ||
+      std::get<SetTrackedChannels>(set_decoded.body).channels[1] != "Security") {
+    std::cerr << "SetTrackedChannels round trip failed\n";
+    return 49;
+  }
+
+  TrackedChannels tracked;
+  tracked.results = {
+      {"Microsoft-Windows-TaskScheduler/Operational",
+       TrackedChannelStatus::Disabled, ""},
+      {"Security", TrackedChannelStatus::BuiltIn, ""},
+      {"Missing/Channel", TrackedChannelStatus::NotFound,
+       "The specified channel could not be found."}};
+  tracked.max_tracked = 16;
+  tracked.tracked = {"Microsoft-Windows-TaskScheduler/Operational"};
+  Envelope tracked_env;
+  tracked_env.request_id = 6002;
+  tracked_env.body = tracked;
+  std::vector<uint8_t> tracked_payload;
+  Envelope tracked_decoded;
+  if (!EncodeEnvelope(tracked_env, &tracked_payload) ||
+      !DecodeEnvelope(tracked_payload.data(), tracked_payload.size(),
+                      &tracked_decoded) ||
+      !std::holds_alternative<TrackedChannels>(tracked_decoded.body)) {
+    std::cerr << "TrackedChannels round trip failed\n";
+    return 50;
+  }
+  const auto& tracked_out = std::get<TrackedChannels>(tracked_decoded.body);
+  if (tracked_out.results.size() != 3 || tracked_out.max_tracked != 16 ||
+      tracked_out.tracked.size() != 1 ||
+      tracked_out.results[0].status != TrackedChannelStatus::Disabled ||
+      tracked_out.results[1].status != TrackedChannelStatus::BuiltIn ||
+      tracked_out.results[2].status != TrackedChannelStatus::NotFound ||
+      tracked_out.results[2].detail.empty()) {
+    std::cerr << "TrackedChannels payload mismatch\n";
+    return 50;
+  }
+
   std::cout << "pulse_wire_tests OK\n";
   return 0;
 }

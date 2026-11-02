@@ -97,6 +97,7 @@ class PulseRoot extends StatelessWidget {
         ChangeNotifierProvider.value(value: services.backgroundMode),
         ChangeNotifierProvider.value(value: services.assistant),
         ChangeNotifierProvider.value(value: services.crashHistory),
+        ChangeNotifierProvider.value(value: services.channels),
       ],
       child: PulseApp(),
     );

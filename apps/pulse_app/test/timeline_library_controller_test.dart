@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pulse/application/timeline_library_controller.dart';
 import 'package:pulse/features/timeline/timeline_query.dart';
 import 'package:pulse/logging/app_logger.dart';
+import 'package:pulse_protocol/pulse_wire.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -49,6 +50,74 @@ void main() {
       await d.load();
       expect(d.savedSearches, hasLength(1));
       expect(d.savedSearches.first.name, 'Kernel 41');
+    });
+
+    test('saved search keeps the channel filter', () async {
+      SharedPreferences.setMockInitialValues({});
+      final c = TimelineLibraryController(logger: AppLogger());
+      await c.load();
+      const channel = 'Microsoft-Windows-TaskScheduler/Operational';
+      await c.saveSearch(
+        name: 'Tasks',
+        query: const TimelineQuery(channel: channel),
+      );
+      expect(c.queryFromSaved(c.savedSearches.first)!.channel, channel);
+
+      // Searches saved before channels existed restore with all channels.
+      final legacy = timelineQueryFromJson({'severity': 'errors'});
+      expect(legacy.channel, isEmpty);
+    });
+
+    test('favorite channels persist in pin order, case-insensitive', () async {
+      SharedPreferences.setMockInitialValues({});
+      final a = TimelineLibraryController(logger: AppLogger());
+      await a.load();
+      expect(a.favoriteChannels, isEmpty);
+
+      await a.toggleFavoriteChannel('Microsoft-Windows-TaskScheduler/Operational');
+      await a.toggleFavoriteChannel('System');
+      expect(a.isFavoriteChannel('system'), isTrue);
+      expect(a.favoriteChannels, [
+        'Microsoft-Windows-TaskScheduler/Operational',
+        'System',
+      ]);
+
+      final b = TimelineLibraryController(logger: AppLogger());
+      await b.load();
+      expect(b.favoriteChannels, a.favoriteChannels);
+
+      // Toggling again (any case) unpins.
+      await b.toggleFavoriteChannel('SYSTEM');
+      expect(b.favoriteChannels, ['Microsoft-Windows-TaskScheduler/Operational']);
+      await b.toggleFavoriteChannel('   ');
+      expect(b.favoriteChannels, hasLength(1));
+    });
+
+    test('hiding an event type works for events from added channels', () async {
+      SharedPreferences.setMockInitialValues({});
+      final c = TimelineLibraryController(logger: AppLogger());
+      await c.load();
+      final fromTaskScheduler = TimelineEvent(
+        eventId: 'Microsoft-Windows-TaskScheduler/Operational|10|201',
+        channel: 'Microsoft-Windows-TaskScheduler/Operational',
+        providerName: 'Microsoft-Windows-TaskScheduler',
+        winEventId: 201,
+        title: 'TaskScheduler · Event 201',
+      );
+      expect(
+        await c.hideEventType(fromTaskScheduler, title: fromTaskScheduler.title),
+        isTrue,
+      );
+      expect(c.isHiddenType(fromTaskScheduler), isTrue);
+      // Same provider and Event ID on another record: hidden as well.
+      expect(
+        c.isHiddenType(TimelineEvent(
+          channel: 'Microsoft-Windows-TaskScheduler/Operational',
+          providerName: 'Microsoft-Windows-TaskScheduler',
+          winEventId: 201,
+        )),
+        isTrue,
+      );
     });
   });
 }
