@@ -57,6 +57,39 @@ void main() {
       expect(q.matches(_ev(channel: 'System')), isFalse);
     });
 
+    test('channel filter shows one channel, case-insensitive', () {
+      const task = 'Microsoft-Windows-TaskScheduler/Operational';
+      final events = [
+        _ev(channel: task),
+        _ev(channel: 'System'),
+        _ev(channel: 'Application'),
+      ];
+      const q = TimelineQuery(
+        channel: 'microsoft-windows-taskscheduler/OPERATIONAL',
+      );
+      expect(q.isActive, isTrue);
+      expect(events.where(q.matches).map((e) => e.channel), [task]);
+
+      // Empty channel: every channel merged.
+      expect(events.where(const TimelineQuery().matches), hasLength(3));
+      // Cleared resets the channel too.
+      expect(q.cleared().channel, isEmpty);
+    });
+
+    test('channel filter combines with the other filters', () {
+      const task = 'Microsoft-Windows-TaskScheduler/Operational';
+      final events = [
+        _ev(channel: task, severity: Severity.error),
+        _ev(channel: task, severity: Severity.info),
+        _ev(channel: 'System', severity: Severity.error),
+      ];
+      const q = TimelineQuery(
+        channel: task,
+        severity: TimelineSeverityFilter.errors,
+      );
+      expect(events.where(q.matches), hasLength(1));
+    });
+
     test('category crash filter', () {
       const q = TimelineQuery(category: TimelineCategoryFilter.crash);
       expect(q.matches(_ev(category: 'Crash')), isTrue);
